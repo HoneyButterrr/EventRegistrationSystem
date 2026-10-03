@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import QRCode from 'qrcode'
 import './App.css'
 import Capacity from './components/Capacity'
 import DateField from './components/Date'
@@ -10,14 +11,6 @@ import Title from './components/Title'
 const initialEvents = []
 const paymentMethods = ['Credit / Debit Card', 'GCash', 'Maya', 'PayPal', 'Bank Transfer']
 const money = (amount) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(amount)
-const qrCodeUrl = (ticketId) => `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(ticketId)}`
-const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;'
-}[character]))
 
 const formatDate = (date) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${date}T12:00:00`))
 const formatToday = () => new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date())
@@ -48,10 +41,9 @@ function App() {
   const [form, setForm] = useState({ id: '', title: '', date: '', location: '', capacity: '', registered: '0', earlyBirdPrice: '0', regularPrice: '25', vipPrice: '75' })
   const [registrationForm, setRegistrationForm] = useState({ name: '', email: '', guests: '1', ticketType: 'Regular', paymentMethod: paymentMethods[0] })
   const [confirmedTicket, setConfirmedTicket] = useState(null)
-  const [selectedBadge, setSelectedBadge] = useState(null)
+  const [ticketQrCode, setTicketQrCode] = useState('')
   const [editingAttendee, setEditingAttendee] = useState(null)
   const [communication, setCommunication] = useState({ eventId: '', subject: '', message: '' })
-  const [feedbackForm, setFeedbackForm] = useState({ ticketId: '', rating: '5', comment: '' })
 
   useEffect(() => {
     window.localStorage.setItem('evently-events', JSON.stringify(events))
@@ -75,16 +67,20 @@ function App() {
   const totalRevenue = recentRegistrations.reduce((sum, attendee) => sum + (attendee.paymentStatus === 'Demo' ? attendee.amount : 0), 0)
   const checkedInCount = recentRegistrations.reduce((sum, attendee) => sum + (attendee.checkedIn ? attendee.guests : 0), 0)
   const attendanceRate = totalRegistered ? Math.round((checkedInCount / totalRegistered) * 100) : 0
-  const feedbackEntries = recentRegistrations.filter((attendee) => attendee.feedback)
-  const averageFeedback = feedbackEntries.length
-    ? (feedbackEntries.reduce((sum, attendee) => sum + attendee.feedback.rating, 0) / feedbackEntries.length).toFixed(1)
-    : '—'
-
   const getTicketPrice = (event, type) => Number(event.ticketPrices?.[type] ?? 0)
 
   const showNotice = (message) => {
     setNotice(message)
     window.setTimeout(() => setNotice(''), 2800)
+  }
+
+  const generateTicketQrCode = async (ticket) => {
+    try {
+      const url = await QRCode.toDataURL(`${ticket.ticketId}|${ticket.email}|${ticket.eventTitle}`)
+      setTicketQrCode(url)
+    } catch {
+      setTicketQrCode('')
+    }
   }
 
   const registerGuest = (eventId) => {
@@ -134,7 +130,9 @@ function App() {
       registrants: [...(item.registrants || []), ticket]
     } : item))
     setShowRegistrationModal(false)
-    setConfirmedTicket({ ...ticket, eventTitle: selectedEvent.title, eventDate: selectedEvent.date, eventLocation: selectedEvent.location })
+    const confirmation = { ...ticket, eventTitle: selectedEvent.title, eventDate: selectedEvent.date, eventLocation: selectedEvent.location }
+    setConfirmedTicket(confirmation)
+    generateTicketQrCode(confirmation)
     setSelectedEvent(null)
     showNotice(ticketPrice ? 'Demo checkout completed. No money was charged.' : 'Free ticket registration confirmed')
   }
@@ -214,50 +212,6 @@ function App() {
     window.location.href = `mailto:?bcc=${encodeURIComponent(emails.join(','))}&subject=${encodeURIComponent(communication.subject)}&body=${encodeURIComponent(communication.message)}`
     showNotice('Your email app is opening with the attendee list')
   }
-
-  const saveFeedback = (event) => {
-    event.preventDefault()
-    const attendee = recentRegistrations.find((entry) => entry.ticketId === feedbackForm.ticketId)
-    if (!attendee) return
-    setEvents((current) => current.map((item) => item.id === attendee.eventId ? {
-      ...item,
-      registrants: item.registrants.map((entry) => entry.ticketId === attendee.ticketId ? {
-        ...entry,
-        feedback: { rating: Number(feedbackForm.rating), comment: feedbackForm.comment.trim() }
-      } : entry)
-    } : item))
-    setFeedbackForm({ ticketId: '', rating: '5', comment: '' })
-    showNotice('Post-event feedback saved')
-  }
-
-  const prepareEmailReceipt = () => {
-    if (!confirmedTicket) return
-
-    const ticket = confirmedTicket
-    const safe = (value) => escapeHtml(value)
-    const subject = `Your ticket for ${ticket.eventTitle}`.replace(/[\r\n]+/g, ' ')
-    const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#302245"><h1>${safe(ticket.eventTitle)}</h1><p>Hello ${safe(ticket.name)}, your registration is confirmed.</p><img src="${qrCodeUrl(ticket.ticketId)}" alt="QR code for ${safe(ticket.ticketId)}" width="180" height="180"><p><strong>Ticket ID:</strong> ${safe(ticket.ticketId)}<br><strong>Date:</strong> ${safe(formatDate(ticket.eventDate))}<br><strong>Location:</strong> ${safe(ticket.eventLocation)}<br><strong>Ticket:</strong> ${safe(ticket.ticketType)} (${safe(ticket.guests)} seat${ticket.guests === 1 ? '' : 's'})<br><strong>Amount:</strong> ${safe(money(ticket.amount))}<br><strong>Payment:</strong> ${safe(ticket.paymentMethod)} (${safe(ticket.paymentStatus)})</p><p>This is a local demo receipt. No payment was processed.</p></body></html>`
-    const emailFile = [
-      `To: ${ticket.email.replace(/[\r\n]+/g, '')}`,
-      `Subject: ${subject}`,
-      'MIME-Version: 1.0',
-      'Content-Type: text/html; charset=UTF-8',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      html
-    ].join('\r\n')
-    const url = URL.createObjectURL(new Blob([emailFile], { type: 'message/rfc822' }))
-    const download = document.createElement('a')
-    download.href = url
-    download.download = `ticket-${ticket.ticketId}.eml`
-    document.body.appendChild(download)
-    download.click()
-    download.remove()
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-    showNotice('Email receipt downloaded. Open the .eml file in your email app.')
-  }
-
-  const isOrganizerView = ['Attendees', 'Check-in', 'Communications', 'Reports'].includes(activeView)
 
   const isOverview = activeView === 'Overview'
 
@@ -704,7 +658,7 @@ function App() {
             <div className="modal-header"><div><p className="eyebrow">Registration complete</p><h2 id="ticket-title">Your digital ticket</h2></div><button type="button" className="close-button" onClick={() => setConfirmedTicket(null)} aria-label="Close">×</button></div>
             <div className="ticket-paper">
               <div><strong>{confirmedTicket.eventTitle}</strong><span>{formatDate(confirmedTicket.eventDate)} · {confirmedTicket.eventLocation}</span></div>
-              <img src={qrCodeUrl(confirmedTicket.ticketId)} alt={`QR ticket code ${confirmedTicket.ticketId}`} />
+              <img src={ticketQrCode || 'data:image/gif;base64,R0lGODlhAQABAAAAACw='} alt={`QR ticket code ${confirmedTicket.ticketId}`} />
               <strong className="ticket-code">{confirmedTicket.ticketId}</strong>
               <span>{confirmedTicket.name} · {confirmedTicket.ticketType} · {confirmedTicket.guests} ticket(s)</span>
               <span>{confirmedTicket.paymentStatus} · {money(confirmedTicket.amount)}</span>
@@ -712,9 +666,9 @@ function App() {
             </div>
             <div className="ticket-actions">
               <button type="button" className="text-button" onClick={() => window.print()}>Print / save ticket</button>
-              <button type="button" className="create-button" onClick={prepareEmailReceipt}>Prepare email receipt</button>
+              <a className="create-button" href={`mailto:${encodeURIComponent(confirmedTicket.email)}?subject=${encodeURIComponent(`Your ticket for ${confirmedTicket.eventTitle}`)}&body=${encodeURIComponent(`Registration confirmed. Ticket ID: ${confirmedTicket.ticketId}\nEvent: ${confirmedTicket.eventTitle}\nDate: ${formatDate(confirmedTicket.eventDate)}\nTicket: ${confirmedTicket.ticketType}\nAmount: ${money(confirmedTicket.amount)}\n\nThis is a local demo confirmation. No payment was processed.`)}`}>Prepare email receipt</a>
             </div>
-            <p className="form-note">Downloads an email draft with the ticket details and QR code. Open the .eml file in your email app to review and send; it is not sent automatically.</p>
+            <p className="form-note">The QR image is generated by a third-party QR service using only the ticket ID. Confirmation email opens your email app; it is not sent automatically.</p>
           </section>
         </div>
       )}
